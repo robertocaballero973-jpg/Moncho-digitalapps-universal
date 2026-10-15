@@ -158,7 +158,7 @@
     const cfg = window.MONCHO_CONFIG || {};
     const ready = Boolean(cfg.supabaseUrl && cfg.supabaseKey && window.supabase && window.supabase.createClient);
     const db = ready ? window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseKey) : null;
-    const $ = (id) => document.getElementById(id);
+    const $ = (selector) => selector.startsWith('[') ? document.querySelector(selector) : document.getElementById(selector);
     const views = ['homeView','authView','publicView','dashboardView'];
     let authMode = 'login';
     let business = null;
