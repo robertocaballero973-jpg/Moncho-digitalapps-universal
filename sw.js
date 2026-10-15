@@ -1,4 +1,4 @@
-const CACHE_NAME = 'moncho-digitalapps-shell-v5';
+const CACHE_NAME = 'moncho-digitalapps-shell-v7';
 const APP_SHELL = [
   './',
   './index.html',
