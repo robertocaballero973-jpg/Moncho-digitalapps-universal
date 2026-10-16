@@ -146,6 +146,13 @@
         <div id="bookingsList" class="list"></div>
       </section>
     </section>
+
+    <section id="adminView" class="view">
+      <div class="row between bar"><div><div class="brandline">Panel privado de Gabriel</div><h2 style="margin:5px 0">Control del piloto</h2></div><div class="row"><button id="adminToOwner" class="btn secondary small" type="button">Mi negocio</button><button id="adminRefresh" class="btn secondary small" type="button">Actualizar</button></div></div>
+      <div id="adminCounter" class="note"></div>
+      <p class="muted smalltext">La fecha de vencimiento y la suspensión se administran manualmente. Suspender bloquea nuevas reservas, pero conserva cuentas, datos y turnos.</p>
+      <div id="adminList" class="list"></div>
+    </section>
   </main>
 
   <footer class="footer">Moncho-digitalapps · Plantilla básica de reservas · By Gabriel C.<br>Las reservas requieren conexión a internet.</footer>
@@ -159,7 +166,7 @@
     const ready = Boolean(cfg.supabaseUrl && cfg.supabaseKey && window.supabase && window.supabase.createClient);
     const db = ready ? window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseKey) : null;
     const $ = (selector) => selector.startsWith('[') ? document.querySelector(selector) : document.getElementById(selector);
-    const views = ['homeView','authView','publicView','dashboardView'];
+    const views = ['homeView','authView','publicView','dashboardView','adminView'];
     let authMode = 'login';
     let business = null;
     let selectedSlot = '';
@@ -182,10 +189,39 @@
     async function requireDb() { if (!ready) { toast('Falta configurar la conexión de Supabase.',true); return false; } return true; }
     function dateLabel(value) { const [y,m,d]=value.split('-').map(Number); return new Date(y,m-1,d).toLocaleDateString('es-AR',{weekday:'short',day:'2-digit',month:'short'}); }
 
-    async function loadOwner() {
+    async function loadAdminPanel() {
+      $('logoutBtn').classList.remove('hidden');
+      showView('adminView');
+      await refreshAdminPanel();
+    }
+    async function refreshAdminPanel() {
+      const box=$('adminList'); box.innerHTML='<p class="muted">Cargando negocios del piloto…</p>';
+      const {data,error}=await db.rpc('moncho_admin_listar_negocios');
+      if(error){$('adminCounter').textContent='No pude cargar el panel de control.';box.innerHTML='<p class="error">'+esc(error.message)+'</p>';return;}
+      const rows=data||[]; const total=rows.length?Number(rows[0].total_negocios):0;
+      $('adminCounter').textContent=`Negocios registrados: ${total}/5. Los negocios suspendidos siguen ocupando su lugar.`;
+      if(!rows.length){box.innerHTML='<p class="muted">Todavía no hay negocios registrados.</p>';return;}
+      box.innerHTML=rows.map(n=>{
+        const days=n.dias_restantes===null?null:Number(n.dias_restantes);
+        const dueText=days===null?'Sin fecha de vencimiento':days>0?`Quedan ${days} días`:days===0?'Vence hoy':`Vencido hace ${Math.abs(days)} días`;
+        const statusText=n.suspendido?'Suspendido':days!==null&&days<0?'Vencido · sigue activo':'Activo';
+        const statusClass=n.suspendido?'cancelado':days!==null&&days<0?'reservado':'confirmado';
+        return `<article class="item"><div class="row between"><div><h3>${esc(n.nombre)}</h3><p>Identificador: ${esc(n.slug)}</p></div><span class="status ${statusClass}">${statusText}</span></div><p class="muted smalltext">Registrado: ${n.registrado_en?new Date(n.registrado_en).toLocaleDateString('es-AR'):'—'} · ${dueText}</p><div class="fieldGrid"><div class="field"><label>Email de acceso del dueño</label><input type="email" data-admin-email="${esc(n.negocio_id)}" value="${esc(n.email_registro||'')}" placeholder="Completar email registrado"></div><div class="field"><label>Vencimiento del pago</label><input type="date" data-admin-due="${esc(n.negocio_id)}" value="${esc(n.fecha_vencimiento||'')}"></div></div><div class="row" style="margin-top:12px"><button class="btn small" type="button" data-admin-save="${esc(n.negocio_id)}">Guardar control</button><button class="btn ${n.suspendido?'secondary':'danger'} small" type="button" data-admin-toggle="${esc(n.negocio_id)}" data-suspended="${n.suspendido?'true':'false'}">${n.suspendido?'Reactivar':'Suspender'}</button></div></article>`;
+      }).join('');
+    }
+    async function saveAdminControl(id,suspended) {
+      const email=$(`[data-admin-email="${id}"]`).value.trim();
+      const due=$(`[data-admin-due="${id}"]`).value||null;
+      const {error}=await db.rpc('moncho_admin_guardar_control',{p_negocio_id:id,p_email_registro:email||null,p_fecha_vencimiento:due,p_suspendido:suspended});
+      if(error){toast(error.message||'No se pudo guardar el control.',true);return;}
+      toast('Control de suscripción guardado.'); await refreshAdminPanel();
+    }
+
+    async function loadOwner(skipAdminCheck=false) {
       if (!await requireDb()) return;
       const {data:{user},error:userError}=await db.auth.getUser();
       if (userError || !user) { home(); showAuth('login'); return; }
+      if(!skipAdminCheck){const {data:isAdmin,error:adminError}=await db.rpc('moncho_es_admin');if(!adminError&&isAdmin){await loadAdminPanel();return;}}
       const pending=localStorage.getItem('md_pending_business');
       if (pending) {
         try {
@@ -294,6 +330,9 @@
       }catch(err){toast(err.message||'No se pudo completar el acceso.',true);}finally{$('authSubmit').disabled=false;}
     });
     $('logoutBtn').addEventListener('click',async()=>{if(db)await db.auth.signOut();home();toast('Sesión cerrada.');});
+    $('adminRefresh').addEventListener('click',refreshAdminPanel);
+    $('adminToOwner').addEventListener('click',()=>loadOwner(true));
+    $('adminList').addEventListener('click',async e=>{const save=e.target.closest('[data-admin-save]'),toggle=e.target.closest('[data-admin-toggle]');if(save){const card=save.closest('.item'),toggleButton=card.querySelector('[data-admin-toggle]');await saveAdminControl(save.dataset.adminSave,toggleButton.dataset.suspended==='true');}else if(toggle){await saveAdminControl(toggle.dataset.adminToggle,toggle.dataset.suspended!=='true');}});
     $('profileForm').addEventListener('submit',async e=>{e.preventDefault();const {error}=await db.from('negocios').update({nombre:$('profileName').value.trim(),slug:$('profileSlug').value.trim().toLowerCase(),direccion:$('profileAddress').value.trim(),whatsapp:$('profileWhatsapp').value.trim(),email_contacto:$('profileEmail').value.trim(),zona_horaria:$('profileTimezone').value.trim()}).eq('id',business.id);if(error)toast(error.message,true);else{business.slug=$('profileSlug').value.trim().toLowerCase();business.nombre=$('profileName').value.trim();$('dashboardTitle').textContent=business.nombre;const u=new URL(location.href);u.search='';u.searchParams.set('b',business.slug);$('shareLink').value=u.toString();toast('Datos guardados.');}});
     $('copyLink').addEventListener('click',async()=>{try{await navigator.clipboard.writeText($('shareLink').value);toast('Enlace copiado.');}catch{ $('shareLink').select();toast('Seleccioné el enlace; copialo.');}});
     $('serviceForm').addEventListener('submit',async e=>{e.preventDefault();const payload={negocio_id:business.id,nombre:$('newServiceName').value.trim(),duracion_min:Number($('newServiceDuration').value),precio:Number($('newServicePrice').value)};const {error}=await db.from('servicios').insert(payload);if(error)toast(error.message,true);else{$('serviceForm').reset();$('newServiceDuration').value=30;await loadServices();toast('Servicio agregado.');}});
