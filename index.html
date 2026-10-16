@@ -81,8 +81,15 @@
             </div>
           </div>
           <button id="authSubmit" class="btn" type="submit">Ingresar</button>
+          <button id="forgotPasswordBtn" class="btn ghost small" type="button">Olvidé mi contraseña</button>
           <p id="authHelp" class="muted smalltext">Ingresá con el email y la contraseña de tu cuenta.</p>
         </form>
+        <div id="passwordResetBox" class="stack hidden">
+          <div class="note">Elegí una contraseña nueva para entrar a tu panel administrador.</div>
+          <div class="field"><label for="newPassword">Nueva contraseña</label><input id="newPassword" type="password" minlength="6" autocomplete="new-password" required></div>
+          <div class="field"><label for="confirmNewPassword">Repetí la contraseña</label><input id="confirmNewPassword" type="password" minlength="6" autocomplete="new-password" required></div>
+          <button id="saveNewPasswordBtn" class="btn" type="button">Guardar nueva contraseña</button>
+        </div>
       </div>
     </section>
 
@@ -150,7 +157,7 @@
     <section id="adminView" class="view">
       <div class="row between bar"><div><div class="brandline">Panel privado de Gabriel</div><h2 style="margin:5px 0">Control del piloto</h2></div><div class="row"><button id="adminToOwner" class="btn secondary small" type="button">Mi negocio</button><button id="adminRefresh" class="btn secondary small" type="button">Actualizar</button></div></div>
       <div id="adminCounter" class="note"></div>
-      <p class="muted smalltext">La fecha de vencimiento y la suspensión se administran manualmente. Suspender bloquea nuevas reservas, pero conserva cuentas, datos y turnos.</p>
+      <p class="muted smalltext">La fecha de vencimiento y la suspensión se administran manualmente. Suspender bloquea nuevas reservas, pero conserva cuentas, datos y turnos. En los negocios que ya existían, la fecha mostrada es la del primer control del panel.</p>
       <div id="adminList" class="list"></div>
     </section>
   </main>
@@ -172,6 +179,7 @@
     let selectedSlot = '';
     let deferredInstall = null;
     let toastTimer;
+    let passwordRecoveryPending = false;
 
     function toast(message, bad = false) {
       const el = $('toast'); el.textContent = message; el.style.background = bad ? '#ffd6ce' : '#f4f1e8';
@@ -184,7 +192,8 @@
     function minOf(time) { const p = String(time).slice(0,5).split(':').map(Number); return p[0]*60+p[1]; }
     function hhmm(minutes) { return String(Math.floor(minutes/60)).padStart(2,'0')+':'+String(minutes%60).padStart(2,'0'); }
     function isoDay(dateString) { const [y,m,d] = dateString.split('-').map(Number); const day = new Date(Date.UTC(y,m-1,d)).getUTCDay(); return day === 0 ? 7 : day; }
-    function showAuth(mode='login') { authMode=mode; $('authTitle').textContent=mode==='register'?'Crear mi negocio':'Ingresar'; $('businessFields').classList.toggle('hidden',mode!=='register'); $('loginTab').className='btn '+(mode==='login'?'':'secondary'); $('registerTab').className='btn '+(mode==='register'?'':'secondary'); $('authSubmit').textContent=mode==='register'?'Crear cuenta y negocio':'Ingresar'; $('authHelp').textContent=mode==='register'?'Se creará tu cuenta y se guardarán los datos básicos del negocio.':'Ingresá con el email y la contraseña de tu cuenta.'; showView('authView'); }
+    function showAuth(mode='login') { authMode=mode; $('authForm').classList.remove('hidden'); $('passwordResetBox').classList.add('hidden'); $('forgotPasswordBtn').classList.toggle('hidden',mode!=='login'); $('authTitle').textContent=mode==='register'?'Crear mi negocio':'Ingresar'; $('businessFields').classList.toggle('hidden',mode!=='register'); $('loginTab').className='btn '+(mode==='login'?'':'secondary'); $('registerTab').className='btn '+(mode==='register'?'':'secondary'); $('authSubmit').textContent=mode==='register'?'Crear cuenta y negocio':'Ingresar'; $('authHelp').textContent=mode==='register'?'Se creará tu cuenta y se guardarán los datos básicos del negocio.':'Ingresá con el email y la contraseña de tu cuenta.'; showView('authView'); }
+    function showPasswordReset() { $('authForm').classList.add('hidden'); $('passwordResetBox').classList.remove('hidden'); $('authTitle').textContent='Cambiar contraseña'; $('newPassword').value=''; $('confirmNewPassword').value=''; showView('authView'); }
     function home() { business=null; selectedSlot=''; showView('homeView'); $('logoutBtn').classList.add('hidden'); }
     async function requireDb() { if (!ready) { toast('Falta configurar la conexión de Supabase.',true); return false; } return true; }
     function dateLabel(value) { const [y,m,d]=value.split('-').map(Number); return new Date(y,m-1,d).toLocaleDateString('es-AR',{weekday:'short',day:'2-digit',month:'short'}); }
@@ -206,7 +215,7 @@
         const dueText=days===null?'Sin fecha de vencimiento':days>0?`Quedan ${days} días`:days===0?'Vence hoy':`Vencido hace ${Math.abs(days)} días`;
         const statusText=n.suspendido?'Suspendido':days!==null&&days<0?'Vencido · sigue activo':'Activo';
         const statusClass=n.suspendido?'cancelado':days!==null&&days<0?'reservado':'confirmado';
-        return `<article class="item"><div class="row between"><div><h3>${esc(n.nombre)}</h3><p>Identificador: ${esc(n.slug)}</p></div><span class="status ${statusClass}">${statusText}</span></div><p class="muted smalltext">Registrado: ${n.registrado_en?new Date(n.registrado_en).toLocaleDateString('es-AR'):'—'} · ${dueText}</p><div class="fieldGrid"><div class="field"><label>Email de acceso del dueño</label><input type="email" data-admin-email="${esc(n.negocio_id)}" value="${esc(n.email_registro||'')}" placeholder="Completar email registrado"></div><div class="field"><label>Vencimiento del pago</label><input type="date" data-admin-due="${esc(n.negocio_id)}" value="${esc(n.fecha_vencimiento||'')}"></div></div><div class="row" style="margin-top:12px"><button class="btn small" type="button" data-admin-save="${esc(n.negocio_id)}">Guardar control</button><button class="btn ${n.suspendido?'secondary':'danger'} small" type="button" data-admin-toggle="${esc(n.negocio_id)}" data-suspended="${n.suspendido?'true':'false'}">${n.suspendido?'Reactivar':'Suspender'}</button></div></article>`;
+        return `<article class="item"><div class="row between"><div><h3>${esc(n.nombre)}</h3><p>Identificador: ${esc(n.slug)}</p></div><span class="status ${statusClass}">${statusText}</span></div><p class="muted smalltext">Registro / control: ${n.registrado_en?new Date(n.registrado_en).toLocaleDateString('es-AR'):'—'} · ${dueText}</p><div class="fieldGrid"><div class="field"><label>Email de acceso del dueño</label><input type="email" data-admin-email="${esc(n.negocio_id)}" value="${esc(n.email_registro||'')}" placeholder="Completar email registrado"></div><div class="field"><label>Vencimiento del pago</label><input type="date" data-admin-due="${esc(n.negocio_id)}" value="${esc(n.fecha_vencimiento||'')}"></div></div><div class="row" style="margin-top:12px"><button class="btn small" type="button" data-admin-save="${esc(n.negocio_id)}">Guardar control</button><button class="btn ${n.suspendido?'secondary':'danger'} small" type="button" data-admin-toggle="${esc(n.negocio_id)}" data-suspended="${n.suspendido?'true':'false'}">${n.suspendido?'Reactivar':'Suspender'}</button></div></article>`;
       }).join('');
     }
     async function saveAdminControl(id,suspended) {
@@ -330,9 +339,11 @@
       }catch(err){toast(err.message||'No se pudo completar el acceso.',true);}finally{$('authSubmit').disabled=false;}
     });
     $('logoutBtn').addEventListener('click',async()=>{if(db)await db.auth.signOut();home();toast('Sesión cerrada.');});
+    $('forgotPasswordBtn').addEventListener('click',async()=>{const email=$('authEmail').value.trim();if(!email){toast('Escribí primero tu email de acceso.',true);$('authEmail').focus();return;}const {error}=await db.auth.resetPasswordForEmail(email,{redirectTo:window.location.origin+'/'});if(error)toast(error.message||'No pude enviar el enlace de recuperación.',true);else toast('Te envié un enlace para cambiar la contraseña. Revisá también Spam.');});
+    $('saveNewPasswordBtn').addEventListener('click',async()=>{const password=$('newPassword').value,confirm=$('confirmNewPassword').value;if(password.length<6){toast('La contraseña debe tener al menos 6 caracteres.',true);return;}if(password!==confirm){toast('Las contraseñas no coinciden.',true);return;}const {error}=await db.auth.updateUser({password});if(error){toast(error.message||'No se pudo cambiar la contraseña.',true);return;}passwordRecoveryPending=false;$('passwordResetBox').classList.add('hidden');$('authForm').classList.remove('hidden');toast('Contraseña actualizada.');await loadOwner();});
     $('adminRefresh').addEventListener('click',refreshAdminPanel);
     $('adminToOwner').addEventListener('click',()=>loadOwner(true));
-    $('adminList').addEventListener('click',async e=>{const save=e.target.closest('[data-admin-save]'),toggle=e.target.closest('[data-admin-toggle]');if(save){const card=save.closest('.item'),toggleButton=card.querySelector('[data-admin-toggle]');await saveAdminControl(save.dataset.adminSave,toggleButton.dataset.suspended==='true');}else if(toggle){await saveAdminControl(toggle.dataset.adminToggle,toggle.dataset.suspended!=='true');}});
+    $('adminList').addEventListener('click',async e=>{const save=e.target.closest('[data-admin-save]'),toggle=e.target.closest('[data-admin-toggle]');if(save){const card=save.closest('.item'),toggleButton=card.querySelector('[data-admin-toggle]');await saveAdminControl(save.dataset.adminSave,toggleButton.dataset.suspended==='true');}else if(toggle){const suspended=toggle.dataset.suspended==='true';const action=suspended?'reactivar':'suspender';if(!window.confirm(`¿Confirmás ${action} este negocio? ${suspended?'Volverá a aceptar nuevas reservas.':'Se bloquearán las nuevas reservas; los datos y turnos existentes se conservan.'}`))return;await saveAdminControl(toggle.dataset.adminToggle,!suspended);}});
     $('profileForm').addEventListener('submit',async e=>{e.preventDefault();const {error}=await db.from('negocios').update({nombre:$('profileName').value.trim(),slug:$('profileSlug').value.trim().toLowerCase(),direccion:$('profileAddress').value.trim(),whatsapp:$('profileWhatsapp').value.trim(),email_contacto:$('profileEmail').value.trim(),zona_horaria:$('profileTimezone').value.trim()}).eq('id',business.id);if(error)toast(error.message,true);else{business.slug=$('profileSlug').value.trim().toLowerCase();business.nombre=$('profileName').value.trim();$('dashboardTitle').textContent=business.nombre;const u=new URL(location.href);u.search='';u.searchParams.set('b',business.slug);$('shareLink').value=u.toString();toast('Datos guardados.');}});
     $('copyLink').addEventListener('click',async()=>{try{await navigator.clipboard.writeText($('shareLink').value);toast('Enlace copiado.');}catch{ $('shareLink').select();toast('Seleccioné el enlace; copialo.');}});
     $('serviceForm').addEventListener('submit',async e=>{e.preventDefault();const payload={negocio_id:business.id,nombre:$('newServiceName').value.trim(),duracion_min:Number($('newServiceDuration').value),precio:Number($('newServicePrice').value)};const {error}=await db.from('servicios').insert(payload);if(error)toast(error.message,true);else{$('serviceForm').reset();$('newServiceDuration').value=30;await loadServices();toast('Servicio agregado.');}});
@@ -363,8 +374,9 @@
     window.addEventListener('appinstalled',()=>toast('App instalada.'));
     if('serviceWorker' in navigator && /^https?:$/.test(location.protocol)){navigator.serviceWorker.register('./sw.js').catch(()=>{});}
     if(!ready){$('homeView').insertAdjacentHTML('afterbegin','<div class="note warn">Falta configurar la conexión con Supabase en este HTML.</div>');}
+    if(ready){passwordRecoveryPending=new URLSearchParams(location.hash.slice(1)).get('type')==='recovery';db.auth.onAuthStateChange(event=>{if(event==='PASSWORD_RECOVERY'){passwordRecoveryPending=true;showPasswordReset();}});}
     const initialSlug=new URLSearchParams(location.search).get('b')||new URLSearchParams(location.search).get('negocio');
-    if(initialSlug){$('findSlug').value=initialSlug;loadPublic(initialSlug);}else if(ready){db.auth.getSession().then(({data})=>{if(data.session)loadOwner();});}
+    if(initialSlug){$('findSlug').value=initialSlug;loadPublic(initialSlug);}else if(ready&&passwordRecoveryPending){showPasswordReset();}else if(ready){db.auth.getSession().then(({data})=>{if(data.session)loadOwner();});}
   })();
   </script>
 </body>
