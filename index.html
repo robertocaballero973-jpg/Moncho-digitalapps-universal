@@ -68,9 +68,10 @@
           <div class="field"><label for="authEmail">Email de acceso</label><input id="authEmail" type="email" autocomplete="email" required></div>
           <div class="field"><label for="authPassword">Contraseña</label><input id="authPassword" type="password" autocomplete="current-password" minlength="6" required></div>
           <div id="businessFields" class="stack hidden">
-            <div class="note smalltext">El piloto permite hasta 5 negocios. Cada cuenta administra un negocio. Usá un identificador corto, por ejemplo: barberia-azara.</div>
+            <div class="note smalltext">El piloto permite hasta 5 negocios. Cada cuenta administra un negocio. El identificador es el nombre corto del enlace; abajo verás la dirección completa lista para compartir.</div>
             <div class="field"><label for="bizName">Nombre del negocio</label><input id="bizName" placeholder="Barbería Ejemplo"></div>
-            <div class="field"><label for="bizSlug">Identificador del enlace</label><input id="bizSlug" placeholder="barberia-ejemplo" autocomplete="off"></div>
+            <div class="field"><label for="bizSlug">Nombre corto del enlace</label><input id="bizSlug" placeholder="barberia-azara" autocomplete="off"></div>
+            <div class="field"><label for="signupPublicLink">Enlace directo para clientes</label><div class="row"><input id="signupPublicLink" readonly placeholder="Completá el nombre corto para ver el enlace"><button id="copySignupLink" class="btn secondary small" type="button" disabled>Copiar enlace</button></div><p class="muted smalltext">Este es el link que compartís o usás para crear el QR.</p></div>
             <div class="two">
               <div class="field"><label for="bizAddress">Dirección</label><input id="bizAddress" placeholder="Calle y localidad"></div>
               <div class="field"><label for="bizWhatsapp">WhatsApp con código de país</label><input id="bizWhatsapp" type="tel" placeholder="5493758000000"></div>
@@ -114,12 +115,13 @@
     <section id="dashboardView" class="view">
       <div class="row between bar"><div><div class="brandline">Panel del dueño</div><h2 id="dashboardTitle" style="margin:5px 0">Mi negocio</h2></div><button class="btn secondary small" type="button" data-home>Volver</button></div>
       <div class="note smalltext">Tus datos quedan aislados de los otros negocios. Esta versión básica usa una plantilla común; no incluye galería, promociones ni logos personalizados.</div>
+      <div id="shareLinkBox" class="card hidden" style="margin-top:14px"><div class="field"><label for="shareLink">Enlace directo para tus clientes y para el QR</label><div class="row"><input id="shareLink" readonly><button id="copyLink" class="btn secondary small" type="button">Copiar enlace</button></div><p class="muted smalltext">Compartí este link: abre directamente la página de reservas de tu negocio.</p></div></div>
       <div class="grid" style="margin-top:16px">
         <section class="card">
           <h2>Datos del negocio</h2>
           <form id="profileForm" class="stack">
             <div class="field"><label for="profileName">Nombre</label><input id="profileName" required></div>
-            <div class="field"><label for="profileSlug">Identificador del enlace</label><input id="profileSlug" required></div>
+            <div class="field"><label for="profileSlug">Nombre corto del enlace</label><input id="profileSlug" required><p class="muted smalltext">Es la parte final de tu link. El enlace completo aparece arriba.</p></div>
             <div class="field"><label for="profileAddress">Dirección</label><input id="profileAddress"></div>
             <div class="two">
               <div class="field"><label for="profileWhatsapp">WhatsApp con código de país</label><input id="profileWhatsapp" type="tel"></div>
@@ -127,7 +129,6 @@
             </div>
             <div class="field"><label for="profileTimezone">Zona horaria</label><input id="profileTimezone"></div>
             <button class="btn" type="submit">Guardar datos</button>
-            <div id="shareLinkBox" class="field hidden"><label for="shareLink">Enlace público para compartir</label><div class="row"><input id="shareLink" readonly><button id="copyLink" class="btn secondary small" type="button">Copiar</button></div></div>
           </form>
         </section>
         <section class="card">
@@ -197,6 +198,8 @@
     function home() { business=null; selectedSlot=''; showView('homeView'); $('logoutBtn').classList.add('hidden'); }
     async function requireDb() { if (!ready) { toast('Falta configurar la conexión de Supabase.',true); return false; } return true; }
     function dateLabel(value) { const [y,m,d]=value.split('-').map(Number); return new Date(y,m-1,d).toLocaleDateString('es-AR',{weekday:'short',day:'2-digit',month:'short'}); }
+    function publicLink(slug) { const link=new URL(window.location.href); link.search=''; link.hash=''; if(slug)link.searchParams.set('b',String(slug).trim().toLowerCase()); return link.toString(); }
+    function updateSignupLink() { const slug=$('bizSlug').value.trim().toLowerCase(); $('signupPublicLink').value=slug?publicLink(slug):''; $('copySignupLink').disabled=!slug; }
 
     async function loadAdminPanel() {
       $('logoutBtn').classList.remove('hidden');
@@ -251,7 +254,7 @@
     async function renderDashboard() {
       $('dashboardTitle').textContent=business.nombre;
       $('profileName').value=business.nombre||''; $('profileSlug').value=business.slug||''; $('profileAddress').value=business.direccion||''; $('profileWhatsapp').value=business.whatsapp||''; $('profileEmail').value=business.email_contacto||''; $('profileTimezone').value=business.zona_horaria||'America/Argentina/Buenos_Aires';
-      const link=new URL(window.location.href); link.search=''; link.searchParams.set('b',business.slug); $('shareLink').value=link.toString(); $('shareLinkBox').classList.remove('hidden');
+      $('shareLink').value=publicLink(business.slug); $('shareLinkBox').classList.remove('hidden');
       await Promise.all([loadServices(),loadHours(),loadBookings()]); showView('dashboardView');
     }
     async function loadServices() {
@@ -317,6 +320,8 @@
     $('ownerBtn').addEventListener('click',()=>showAuth('login'));
     $('loginTab').addEventListener('click',()=>showAuth('login'));
     $('registerTab').addEventListener('click',()=>showAuth('register'));
+    $('bizSlug').addEventListener('input',updateSignupLink);
+    $('copySignupLink').addEventListener('click',async()=>{const value=$('signupPublicLink').value;if(!value)return;try{await navigator.clipboard.writeText(value);toast('Enlace copiado.');}catch{$('signupPublicLink').select();document.execCommand('copy');toast('Enlace copiado.');}});
     document.querySelectorAll('[data-home]').forEach(b=>b.addEventListener('click',home));
     $('authForm').addEventListener('submit',async e=>{
       e.preventDefault();if(!await requireDb())return;const email=$('authEmail').value.trim(),password=$('authPassword').value;
@@ -344,7 +349,7 @@
     $('adminRefresh').addEventListener('click',refreshAdminPanel);
     $('adminToOwner').addEventListener('click',()=>loadOwner(true));
     $('adminList').addEventListener('click',async e=>{const save=e.target.closest('[data-admin-save]'),toggle=e.target.closest('[data-admin-toggle]');if(save){const card=save.closest('.item'),toggleButton=card.querySelector('[data-admin-toggle]');await saveAdminControl(save.dataset.adminSave,toggleButton.dataset.suspended==='true');}else if(toggle){const suspended=toggle.dataset.suspended==='true';const action=suspended?'reactivar':'suspender';if(!window.confirm(`¿Confirmás ${action} este negocio? ${suspended?'Volverá a aceptar nuevas reservas.':'Se bloquearán las nuevas reservas; los datos y turnos existentes se conservan.'}`))return;await saveAdminControl(toggle.dataset.adminToggle,!suspended);}});
-    $('profileForm').addEventListener('submit',async e=>{e.preventDefault();const {error}=await db.from('negocios').update({nombre:$('profileName').value.trim(),slug:$('profileSlug').value.trim().toLowerCase(),direccion:$('profileAddress').value.trim(),whatsapp:$('profileWhatsapp').value.trim(),email_contacto:$('profileEmail').value.trim(),zona_horaria:$('profileTimezone').value.trim()}).eq('id',business.id);if(error)toast(error.message,true);else{business.slug=$('profileSlug').value.trim().toLowerCase();business.nombre=$('profileName').value.trim();$('dashboardTitle').textContent=business.nombre;const u=new URL(location.href);u.search='';u.searchParams.set('b',business.slug);$('shareLink').value=u.toString();toast('Datos guardados.');}});
+    $('profileForm').addEventListener('submit',async e=>{e.preventDefault();const {error}=await db.from('negocios').update({nombre:$('profileName').value.trim(),slug:$('profileSlug').value.trim().toLowerCase(),direccion:$('profileAddress').value.trim(),whatsapp:$('profileWhatsapp').value.trim(),email_contacto:$('profileEmail').value.trim(),zona_horaria:$('profileTimezone').value.trim()}).eq('id',business.id);if(error)toast(error.message,true);else{business.slug=$('profileSlug').value.trim().toLowerCase();business.nombre=$('profileName').value.trim();$('dashboardTitle').textContent=business.nombre;$('shareLink').value=publicLink(business.slug);toast('Datos guardados.');}});
     $('copyLink').addEventListener('click',async()=>{try{await navigator.clipboard.writeText($('shareLink').value);toast('Enlace copiado.');}catch{ $('shareLink').select();toast('Seleccioné el enlace; copialo.');}});
     $('serviceForm').addEventListener('submit',async e=>{e.preventDefault();const payload={negocio_id:business.id,nombre:$('newServiceName').value.trim(),duracion_min:Number($('newServiceDuration').value),precio:Number($('newServicePrice').value)};const {error}=await db.from('servicios').insert(payload);if(error)toast(error.message,true);else{$('serviceForm').reset();$('newServiceDuration').value=30;await loadServices();toast('Servicio agregado.');}});
     $('servicesList').addEventListener('click',async e=>{
