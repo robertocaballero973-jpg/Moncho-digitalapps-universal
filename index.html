@@ -100,6 +100,7 @@
         <div id="publicError" class="note warn hidden"></div>
         <form id="bookingForm" class="stack hidden">
           <div class="field"><label for="serviceSelect">Servicio</label><select id="serviceSelect" required></select></div>
+          <div id="barberField" class="field hidden"><label for="barberSelect">Barbero</label><select id="barberSelect"><option value="">Elegí un barbero</option></select><p class="muted smalltext">También podés elegir cualquiera disponible.</p></div>
           <div class="field"><label for="bookingDate">Fecha</label><input id="bookingDate" type="date" required></div>
           <div><label>Horarios disponibles</label><div id="slots" class="slotGrid" style="margin-top:8px"></div></div>
           <div class="two">
@@ -146,6 +147,18 @@
         </section>
       </div>
       <section class="card" style="margin-top:16px">
+        <h2>Barberos (opcional)</h2>
+        <p class="muted smalltext">Activá la elección de barbero. Por defecto comparten los horarios del negocio; cada uno puede usar un horario propio. Servicios y precios son compartidos.</p>
+        <label class="row"><input id="multiBarberToggle" type="checkbox"> Permitir elegir barbero al reservar</label>
+        <button id="saveBarberModeBtn" class="btn small" type="button" style="margin-top:10px">Guardar opción</button>
+        <div class="divider"></div>
+        <form id="barberForm" class="row">
+          <div class="field" style="flex:1;min-width:200px"><label for="newBarberName">Nombre del barbero</label><input id="newBarberName" maxlength="80" required></div>
+          <button class="btn" type="submit">Agregar barbero</button>
+        </form>
+        <div id="barbersList" class="list" style="margin-top:12px"></div>
+      </section>
+      <section class="card" style="margin-top:16px">
         <div class="row between"><div><h2 style="margin-bottom:4px">Días y horarios</h2><p class="muted smalltext" style="margin-top:0">Esta primera pantalla permite un intervalo de atención por día.</p></div><button id="saveHoursBtn" class="btn small" type="button">Guardar horarios</button></div>
         <div id="hoursList"></div>
       </section>
@@ -178,6 +191,8 @@
     let authMode = 'login';
     let business = null;
     let selectedSlot = '';
+    let selectedBarberForBooking = '';
+    let ownerBarbers = [];
     let deferredInstall = null;
     let toastTimer;
     let passwordRecoveryPending = false;
@@ -255,7 +270,7 @@
       $('dashboardTitle').textContent=business.nombre;
       $('profileName').value=business.nombre||''; $('profileSlug').value=business.slug||''; $('profileAddress').value=business.direccion||''; $('profileWhatsapp').value=business.whatsapp||''; $('profileEmail').value=business.email_contacto||''; $('profileTimezone').value=business.zona_horaria||'America/Argentina/Buenos_Aires';
       $('shareLink').value=publicLink(business.slug); $('shareLinkBox').classList.remove('hidden');
-      await Promise.all([loadServices(),loadHours(),loadBookings()]); showView('dashboardView');
+      await Promise.all([loadServices(),loadBarbers(),loadHours(),loadBookings()]); showView('dashboardView');
     }
     async function loadServices() {
       const box=$('servicesList'); box.innerHTML='<p class="muted">Cargando servicios…</p>';
@@ -263,6 +278,60 @@
       if(error){box.innerHTML='<p class="error">'+esc(error.message)+'</p>';return;}
       if(!data.length){box.innerHTML='<p class="muted">Todavía no cargaste servicios.</p>';return;}
       box.innerHTML=data.map(s=>`<div class="item" data-service="${s.id}"><div class="row between"><div><h3>${esc(s.nombre)} ${s.activo?'':'<span class="tag">Pausado</span>'}</h3><p>${money(s.precio)} · ${Number(s.duracion_min)} min</p></div><button class="btn ${s.activo?'secondary':'ghost'} small" data-toggle-service="${s.id}" data-active="${s.activo}">${s.activo?'Pausar':'Activar'}</button></div><div class="fieldGrid" style="margin-top:10px"><div class="field"><label>Nombre</label><input data-edit-name="${s.id}" value="${esc(s.nombre)}"></div><div class="field"><label>Duración (min)</label><input data-edit-duration="${s.id}" type="number" min="5" max="720" step="5" value="${Number(s.duracion_min)}"></div><div class="field"><label>Precio</label><input data-edit-price="${s.id}" type="number" min="0" step="0.01" value="${Number(s.precio)}"></div><div class="row" style="align-self:end"><button class="btn small" data-save-service="${s.id}">Guardar</button></div></div></div>`).join('');
+    }
+    async function loadBarbers() {
+      $('multiBarberToggle').checked=Boolean(business.multi_barbero);
+      const box=$('barbersList');box.innerHTML='<p class="muted">Cargando barberos…</p>';
+      const {data,error}=await db.from('barberos').select('id,nombre,activo,usa_horario_propio').eq('negocio_id',business.id).order('nombre');
+      if(error){ownerBarbers=[];box.innerHTML='<p class="error">No se pudieron cargar los barberos: '+esc(error.message)+'</p>';return;}
+      ownerBarbers=data||[];
+      if(!ownerBarbers.length){box.innerHTML='<p class="muted">Todavía no agregaste barberos.</p>';return;}
+      const {data:horarios,error:he}=await db.from('barbero_horarios').select('barbero_id,dia_semana,hora_apertura,hora_cierre,activo').in('barbero_id',ownerBarbers.map(b=>b.id)).order('dia_semana');
+      if(he){box.innerHTML='<p class="error">No se pudieron cargar los horarios de los barberos: '+esc(he.message)+'</p>';return;}
+      const days=['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'];
+      box.innerHTML=ownerBarbers.map(b=>{
+        const propios=(horarios||[]).filter(h=>h.barbero_id===b.id);
+        const editor=b.usa_horario_propio?`<div style="margin-top:10px"><p class="muted smalltext">Marcá los días y ajustá sus horas de atención.</p>${days.map((name,i)=>{const h=propios.find(x=>Number(x.dia_semana)===i+1);return `<div class="day" style="grid-template-columns:minmax(95px,1fr) 1fr 1fr;gap:8px"><label class="row"><input type="checkbox" data-bh-active="${b.id}-${i+1}" ${h&&h.activo?'checked':''}> ${name}</label><input type="time" data-bh-open="${b.id}-${i+1}" value="${h?String(h.hora_apertura).slice(0,5):'09:00'}" aria-label="Apertura ${name}"><input type="time" data-bh-close="${b.id}-${i+1}" value="${h?String(h.hora_cierre).slice(0,5):'18:00'}" aria-label="Cierre ${name}"></div>`;}).join('')}<button type="button" class="btn small" style="margin-top:10px" data-barber-hours-save="${b.id}">Guardar horarios</button></div>`:'<p class="muted smalltext">Usa los días y horarios generales del negocio.</p>';
+        return `<article class="item"><div class="row between"><div><h3>${esc(b.nombre)}</h3><span class="tag">${b.activo?'Activo':'Pausado'}</span></div><button type="button" class="btn ${b.activo?'secondary':'ghost'} small" data-barber-toggle="${b.id}" data-active="${b.activo}">${b.activo?'Pausar':'Activar'}</button></div><div class="row" style="margin-top:10px"><label class="row"><input type="checkbox" data-barber-own="${b.id}" ${b.usa_horario_propio?'checked':''}> Tiene horario propio</label><button type="button" class="btn secondary small" data-barber-mode-save="${b.id}">Guardar modalidad</button></div>${editor}</article>`;
+      }).join('');
+    }
+    async function saveBarberScheduleMode(id){
+      const own=$(`[data-barber-own="${id}"]`).checked;
+      try{
+        if(own){
+          const {data:existing,error:ee}=await db.from('barbero_horarios').select('id').eq('barbero_id',id).limit(1);
+          if(ee)throw ee;
+          if(!existing||!existing.length){
+            const {data:general,error:ge}=await db.from('horarios').select('dia_semana,hora_apertura,hora_cierre,activo').eq('negocio_id',business.id);
+            if(ge)throw ge;
+            const rows=Array.from({length:7},(_,i)=>{const h=(general||[]).find(x=>Number(x.dia_semana)===i+1);return {barbero_id:id,dia_semana:i+1,hora_apertura:h?String(h.hora_apertura).slice(0,5):'09:00',hora_cierre:h?String(h.hora_cierre).slice(0,5):'18:00',activo:Boolean(h&&h.activo)};});
+            const {error:se}=await db.from('barbero_horarios').upsert(rows,{onConflict:'barbero_id,dia_semana'});
+            if(se)throw se;
+          }
+        }
+        const {error}=await db.from('barberos').update({usa_horario_propio:own}).eq('id',id).eq('negocio_id',business.id);
+        if(error)throw error;
+        await loadBarbers();toast(own?'Horario propio activado; revisá y guardá sus días.':'Ahora usa el horario general del negocio.');
+      }catch(err){toast(err.message||'No se pudo guardar la modalidad de horario.',true);}
+    }
+    async function saveBarberSchedule(id){
+      const rows=[];
+      for(let day=1;day<=7;day++){
+        const key=id+'-'+day,activo=$(`[data-bh-active="${key}"]`).checked,open=$(`[data-bh-open="${key}"]`).value,close=$(`[data-bh-close="${key}"]`).value;
+        if(activo&&(!open||!close||open>=close)){toast('Revisá la apertura y el cierre de cada día activo.',true);return;}
+        rows.push({barbero_id:id,dia_semana:day,hora_apertura:open||'09:00',hora_cierre:close||'18:00',activo});
+      }
+      if(!rows.some(r=>r.activo)){toast('Activá al menos un día para ese barbero.',true);return;}
+      const {error}=await db.from('barbero_horarios').upsert(rows,{onConflict:'barbero_id,dia_semana'});
+      if(error){toast(error.message||'No se pudieron guardar los horarios.',true);return;}
+      await loadBarbers();toast('Horarios del barbero guardados.');
+    }
+    async function saveMultiBarberMode(){
+      const enabled=$('multiBarberToggle').checked;
+      if(enabled&&!ownerBarbers.some(b=>b.activo)){toast('Agregá y activá al menos un barbero antes de habilitar esta opción.',true);$('multiBarberToggle').checked=Boolean(business.multi_barbero);return;}
+      const {error}=await db.from('negocios').update({multi_barbero:enabled}).eq('id',business.id);
+      if(error){$('multiBarberToggle').checked=Boolean(business.multi_barbero);toast('No se pudo guardar la opción: '+error.message,true);return;}
+      business.multi_barbero=enabled;toast(enabled?'Los clientes podrán elegir barbero.':'La reserva vuelve al modo de un solo barbero.');
     }
     async function loadHours() {
       const days=['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'];
@@ -273,10 +342,14 @@
     }
     async function loadBookings() {
       const box=$('bookingsList'); box.innerHTML='<p class="muted">Cargando turnos…</p>';
-      const {data,error}=await db.from('turnos').select('id,fecha,hora_inicio,hora_fin,servicio_nombre,duracion_min,precio,cliente_nombre,cliente_telefono,estado').eq('negocio_id',business.id).gte('fecha',localDate()).order('fecha').order('hora_inicio').limit(100);
+      const [{data,error},{data:barberos}]=await Promise.all([
+        db.from('turnos').select('id,fecha,hora_inicio,hora_fin,servicio_nombre,duracion_min,precio,cliente_nombre,cliente_telefono,estado,barbero_id').eq('negocio_id',business.id).gte('fecha',localDate()).order('fecha').order('hora_inicio').limit(100),
+        db.from('barberos').select('id,nombre').eq('negocio_id',business.id)
+      ]);
       if(error){box.innerHTML='<p class="error">'+esc(error.message)+'</p>';return;}
       if(!data.length){box.innerHTML='<p class="muted">Todavía no hay turnos próximos.</p>';return;}
-      box.innerHTML=data.map(t=>`<article class="item"><div class="row between"><div><h3>${dateLabel(t.fecha)} · ${String(t.hora_inicio).slice(0,5)}–${String(t.hora_fin).slice(0,5)}</h3><p>${esc(t.cliente_nombre)} · ${esc(t.cliente_telefono)}</p><p>${esc(t.servicio_nombre)} · ${money(t.precio)}</p></div><span class="status ${esc(t.estado)}">${esc(t.estado)}</span></div><div class="row" style="margin-top:10px">${t.estado!=='confirmado'&&t.estado!=='cancelado'&&t.estado!=='completado'?`<button class="btn small" data-state="confirmado" data-turn="${t.id}">Confirmar</button>`:''}${t.estado!=='cancelado'&&t.estado!=='completado'?`<button class="btn danger small" data-state="cancelado" data-turn="${t.id}">Cancelar</button>`:''}${t.estado==='confirmado'?`<button class="btn secondary small" data-state="completado" data-turn="${t.id}">Completar</button>`:''}</div></article>`).join('');
+      const barberNames=new Map((barberos||[]).map(b=>[b.id,b.nombre]));
+      box.innerHTML=data.map(t=>`<article class="item"><div class="row between"><div><h3>${dateLabel(t.fecha)} · ${String(t.hora_inicio).slice(0,5)}–${String(t.hora_fin).slice(0,5)}</h3><p>${esc(t.cliente_nombre)} · ${esc(t.cliente_telefono)}</p><p>${esc(t.servicio_nombre)} · ${money(t.precio)}</p>${t.barbero_id?`<p>Barbero: ${esc(barberNames.get(t.barbero_id)||'No disponible')}</p>`:''}</div><span class="status ${esc(t.estado)}">${esc(t.estado)}</span></div><div class="row" style="margin-top:10px">${t.estado!=='confirmado'&&t.estado!=='cancelado'&&t.estado!=='completado'?`<button class="btn small" data-state="confirmado" data-turn="${t.id}">Confirmar</button>`:''}${t.estado!=='cancelado'&&t.estado!=='completado'?`<button class="btn danger small" data-state="cancelado" data-turn="${t.id}">Cancelar</button>`:''}${t.estado==='confirmado'?`<button class="btn secondary small" data-state="completado" data-turn="${t.id}">Completar</button>`:''}</div></article>`).join('');
     }
 
     async function loadPublic(slug) {
@@ -286,34 +359,48 @@
       if(error||!b){$('publicBusinessName').textContent='';$('publicError').textContent='No encontramos una barbería activa con ese enlace.';$('publicError').classList.remove('hidden');return;}
       business=b; $('publicBusinessName').textContent=b.nombre;
       $('publicBusinessInfo').textContent=b.direccion||'';const contacts=$('publicContactButtons');contacts.replaceChildren();if(b.whatsapp){const a=document.createElement('a');a.href=`https://wa.me/${String(b.whatsapp).replace(/[^0-9]/g,'')}`;a.target='_blank';a.rel='noopener';a.className='btn secondary small';a.textContent='Contactar por WhatsApp';contacts.append(a);}if(b.email_contacto){const a=document.createElement('a');a.href=`mailto:${String(b.email_contacto).trim()}`;a.className='btn secondary small';a.textContent='Enviar correo';contacts.append(a);}
+      window.currentBarbers=[];
+      $('barberField').classList.add('hidden');$('barberSelect').innerHTML='<option value="">Elegí un barbero</option>';
+      if(b.multi_barbero){
+        const {data:barberos,error:be}=await db.from('barberos').select('id,nombre,usa_horario_propio').eq('negocio_id',b.id).eq('activo',true).order('nombre');
+        if(be||!barberos||!barberos.length){$('publicError').textContent='Este negocio está configurando sus barberos. Probá más tarde o contactalo.';$('publicError').classList.remove('hidden');return;}
+        window.currentBarbers=barberos;$('barberField').classList.remove('hidden');
+        $('barberSelect').innerHTML='<option value="">Elegí un barbero</option><option value="__any__">Cualquiera disponible</option>'+barberos.map(x=>`<option value="${x.id}">${esc(x.nombre)}</option>`).join('');
+      }
       const {data:services,error:se}=await db.from('servicios').select('id,nombre,duracion_min,precio').eq('negocio_id',b.id).eq('activo',true).order('nombre');
       if(se||!services||!services.length){$('publicError').textContent='Este negocio todavía no cargó servicios para reservar.';$('publicError').classList.remove('hidden');return;}
       window.currentServices=services;
       $('serviceSelect').innerHTML=services.map(s=>`<option value="${s.id}">${esc(s.nombre)} · ${money(s.precio)} · ${Number(s.duracion_min)} min</option>`).join('');
-      $('bookingMessage').classList.remove('bookingAlert'); $('bookingDate').min=localDate(); $('bookingDate').value=localDate(); $('bookingMessage').textContent=''; $('bookingForm').classList.remove('hidden'); selectedSlot=''; await renderSlots();
+      $('bookingMessage').classList.remove('bookingAlert'); $('bookingDate').min=localDate(); $('bookingDate').value=localDate(); $('bookingMessage').textContent=''; $('bookingForm').classList.remove('hidden'); selectedSlot='';selectedBarberForBooking=''; await renderSlots();
     }
     async function renderSlots() {
-      selectedSlot=''; $('bookingSubmit').disabled=true; const box=$('slots');
+      selectedSlot='';selectedBarberForBooking='';$('bookingSubmit').disabled=true;const box=$('slots');
       if(!business){box.innerHTML='';return;}
-      const date=$('bookingDate').value; const serviceId=$('serviceSelect').value;
+      const date=$('bookingDate').value,serviceId=$('serviceSelect').value,barberChoice=business.multi_barbero?$('barberSelect').value:'';
+      if(business.multi_barbero&&!barberChoice){box.innerHTML='<div class="slotEmpty">Elegí un barbero o “Cualquiera disponible” para ver los horarios.</div>';return;}
       if(!date||!serviceId){box.innerHTML='<div class="slotEmpty">Elegí un servicio y una fecha.</div>';return;}
       box.innerHTML='<div class="slotEmpty">Buscando disponibilidad…</div>';
-      const service=window.currentServices?.find(s=>s.id===serviceId) || null;
+      const service=window.currentServices?.find(s=>s.id===serviceId)||null;
       let duration;
-      if(!service){const {data}=await db.from('servicios').select('id,duracion_min').eq('id',serviceId).maybeSingle();duration=Number(data?.duracion_min||0);} else duration=Number(service.duracion_min);
-      window.currentServices=window.currentServices||[];
-      if(!service){window.currentServices.push({id:serviceId,duracion_min:duration});}
-      const day=isoDay(date);
-      const [{data:hours,error:he},{data:busy,error:be}]=await Promise.all([
+      if(!service){const {data}=await db.from('servicios').select('id,duracion_min').eq('id',serviceId).maybeSingle();duration=Number(data?.duracion_min||0);}else duration=Number(service.duracion_min);
+      window.currentServices=window.currentServices||[];if(!service)window.currentServices.push({id:serviceId,duracion_min:duration});
+      const day=isoDay(date),barberCandidates=business.multi_barbero?(barberChoice==='__any__'?(window.currentBarbers||[]):(window.currentBarbers||[]).filter(b=>b.id===barberChoice)):[],requestedBarber=business.multi_barbero&&barberChoice!=='__any__'?barberChoice:null;
+      const customIds=barberCandidates.filter(b=>b.usa_horario_propio).map(b=>b.id);
+      const customPromise=customIds.length?db.from('barbero_horarios').select('barbero_id,hora_apertura,hora_cierre').in('barbero_id',customIds).eq('dia_semana',day).eq('activo',true):Promise.resolve({data:[],error:null});
+      const [{data:hours,error:he},{data:busy,error:be},{data:customHours,error:ce}]=await Promise.all([
         db.from('horarios').select('hora_apertura,hora_cierre').eq('negocio_id',business.id).eq('dia_semana',day).eq('activo',true).order('hora_apertura'),
-        db.rpc('turnos_ocupados',{p_negocio_id:business.id,p_fecha:date})
+        db.rpc('turnos_ocupados_por_barbero',{p_negocio_id:business.id,p_fecha:date,p_barbero_id:requestedBarber}),
+        customPromise
       ]);
-      if(he||be){box.innerHTML='<div class="slotEmpty">No pudimos consultar los horarios. Probá de nuevo.</div>';return;}
-      if(!hours||!hours.length){box.innerHTML='<div class="slotEmpty">El negocio no atiende ese día.</div>';return;}
-      const occupied=(busy||[]).map(x=>[minOf(x.inicio),minOf(x.fin)]); const now=new Date(); const current=now.getHours()*60+now.getMinutes(); const result=[];
-      hours.forEach(h=>{const start=minOf(h.hora_apertura),end=minOf(h.hora_cierre);for(let m=start;m+duration<=end;m+=15){if(date===localDate()&&m<=current)continue;const overlaps=occupied.some(([a,b])=>m<b&&m+duration>a);if(!overlaps)result.push(m);}});
+      if(he||be||ce){box.innerHTML='<div class="slotEmpty">No pudimos consultar horarios y disponibilidad. Probá de nuevo.</div>';return;}
+      const occupied=busy||[],ownHours=customHours||[],now=new Date(),current=now.getHours()*60+now.getMinutes(),resultByTime=new Map();
+      const overlaps=(x,start,end)=>start<minOf(x.fin)&&end>minOf(x.inicio);
+      const addSlots=(schedule,barber)=>{(schedule||[]).forEach(h=>{const start=minOf(h.hora_apertura),end=minOf(h.hora_cierre);for(let m=start;m+duration<=end;m+=15){if(date===localDate()&&m<=current)continue;if(occupied.some(x=>(!business.multi_barbero||x.barbero_id===null||x.barbero_id===barber.id)&&overlaps(x,m,m+duration)))continue;if(!resultByTime.has(m))resultByTime.set(m,barber?.id||'');}});};
+      if(business.multi_barbero){for(const barber of barberCandidates){const schedule=barber.usa_horario_propio?ownHours.filter(h=>h.barbero_id===barber.id):hours||[];addSlots(schedule,barber);}}
+      else addSlots(hours||[],null);
+      const result=Array.from(resultByTime,([minute,barberId])=>({minute,barberId})).sort((a,b)=>a.minute-b.minute);
       if(!result.length){box.innerHTML='<div class="slotEmpty">No hay horarios disponibles para ese día.</div>';return;}
-      box.innerHTML=result.map(m=>`<button type="button" class="slot" data-slot="${hhmm(m)}">${hhmm(m)}</button>`).join('');
+      box.innerHTML=result.map(x=>`<button type="button" class="slot" data-slot="${hhmm(x.minute)}" data-slot-barber="${x.barberId}">${hhmm(x.minute)}</button>`).join('');
     }
 
     $('findBusinessForm').addEventListener('submit',e=>{e.preventDefault();const slug=$('findSlug').value.trim().toLowerCase();if(slug)loadPublic(slug);});
@@ -352,6 +439,19 @@
     $('profileForm').addEventListener('submit',async e=>{e.preventDefault();const {error}=await db.from('negocios').update({nombre:$('profileName').value.trim(),slug:$('profileSlug').value.trim().toLowerCase(),direccion:$('profileAddress').value.trim(),whatsapp:$('profileWhatsapp').value.trim(),email_contacto:$('profileEmail').value.trim(),zona_horaria:$('profileTimezone').value.trim()}).eq('id',business.id);if(error)toast(error.message,true);else{business.slug=$('profileSlug').value.trim().toLowerCase();business.nombre=$('profileName').value.trim();$('dashboardTitle').textContent=business.nombre;$('shareLink').value=publicLink(business.slug);toast('Datos guardados.');}});
     $('copyLink').addEventListener('click',async()=>{try{await navigator.clipboard.writeText($('shareLink').value);toast('Enlace copiado.');}catch{ $('shareLink').select();toast('Seleccioné el enlace; copialo.');}});
     $('serviceForm').addEventListener('submit',async e=>{e.preventDefault();const payload={negocio_id:business.id,nombre:$('newServiceName').value.trim(),duracion_min:Number($('newServiceDuration').value),precio:Number($('newServicePrice').value)};const {error}=await db.from('servicios').insert(payload);if(error)toast(error.message,true);else{$('serviceForm').reset();$('newServiceDuration').value=30;await loadServices();toast('Servicio agregado.');}});
+    $('barberForm').addEventListener('submit',async e=>{e.preventDefault();const nombre=$('newBarberName').value.trim();if(!nombre)return;const {error}=await db.from('barberos').insert({negocio_id:business.id,nombre});if(error){toast(error.message||'No se pudo agregar el barbero.',true);return;}$('barberForm').reset();await loadBarbers();toast('Barbero agregado.');});
+    $('saveBarberModeBtn').addEventListener('click',saveMultiBarberMode);
+    $('barbersList').addEventListener('click',async e=>{
+      const mode=e.target.closest('[data-barber-mode-save]'),hours=e.target.closest('[data-barber-hours-save]'),button=e.target.closest('[data-barber-toggle]');
+      if(mode){await saveBarberScheduleMode(mode.dataset.barberModeSave);return;}
+      if(hours){await saveBarberSchedule(hours.dataset.barberHoursSave);return;}
+      if(!button)return;
+      const id=button.dataset.barberToggle,wasActive=button.dataset.active==='true';
+      if(wasActive&&business.multi_barbero&&ownerBarbers.filter(b=>b.activo).length<=1){toast('No podés pausar al único barbero mientras la elección esté activa. Agregá otro o apagá esa opción primero.',true);return;}
+      const {error}=await db.from('barberos').update({activo:!wasActive}).eq('id',id).eq('negocio_id',business.id);
+      if(error){toast(error.message||'No se pudo cambiar el estado del barbero.',true);return;}
+      await loadBarbers();toast(wasActive?'Barbero pausado.':'Barbero activado.');
+    });
     $('servicesList').addEventListener('click',async e=>{
       const save=e.target.closest('[data-save-service]');const toggle=e.target.closest('[data-toggle-service]');
       if(save){const id=save.dataset.saveService;const payload={nombre:$(`[data-edit-name="${id}"]`).value.trim(),duracion_min:Number($(`[data-edit-duration="${id}"]`).value),precio:Number($(`[data-edit-price="${id}"]`).value)};const {error}=await db.from('servicios').update(payload).eq('id',id).eq('negocio_id',business.id);if(error)toast(error.message,true);else{await loadServices();toast('Servicio actualizado.');}}
@@ -363,15 +463,15 @@
     });
     $('refreshBookings').addEventListener('click',loadBookings);
     $('bookingsList').addEventListener('click',async e=>{const b=e.target.closest('[data-state]');if(!b)return;const {error}=await db.rpc('cambiar_estado_turno',{p_turno_id:b.dataset.turn,p_estado:b.dataset.state});if(error)toast(error.message,true);else{await loadBookings();toast('Estado del turno actualizado.');}});
-    $('serviceSelect').addEventListener('change',renderSlots);$('bookingDate').addEventListener('change',renderSlots);
-    $('slots').addEventListener('click',e=>{const b=e.target.closest('[data-slot]');if(!b)return;selectedSlot=b.dataset.slot;document.querySelectorAll('.slot').forEach(x=>x.classList.toggle('selected',x===b));$('bookingSubmit').disabled=false;});
+    $('serviceSelect').addEventListener('change',renderSlots);$('bookingDate').addEventListener('change',renderSlots);$('barberSelect').addEventListener('change',renderSlots);
+    $('slots').addEventListener('click',e=>{const b=e.target.closest('[data-slot]');if(!b)return;selectedSlot=b.dataset.slot;selectedBarberForBooking=b.dataset.slotBarber||'';document.querySelectorAll('.slot').forEach(x=>x.classList.toggle('selected',x===b));$('bookingSubmit').disabled=Boolean(business.multi_barbero&&!selectedBarberForBooking);});
     $('bookingForm').addEventListener('submit',async e=>{
-      e.preventDefault();if(!selectedSlot){toast('Elegí un horario disponible.',true);return;}
-      const serviceId=$('serviceSelect').value;const {data,error}=await db.rpc('crear_turno',{p_negocio_id:business.id,p_servicio_id:serviceId,p_fecha:$('bookingDate').value,p_hora_inicio:selectedSlot+':00',p_cliente_nombre:$('customerName').value.trim(),p_cliente_telefono:$('customerPhone').value.trim()});
+      e.preventDefault();if(!selectedSlot){toast('Elegí un horario disponible.',true);return;}if(business.multi_barbero&&!selectedBarberForBooking){toast('Elegí un barbero y un horario disponible.',true);return;}
+      const serviceId=$('serviceSelect').value,barberId=business.multi_barbero?selectedBarberForBooking:null;const {data,error}=await db.rpc('crear_turno_por_barbero',{p_negocio_id:business.id,p_servicio_id:serviceId,p_fecha:$('bookingDate').value,p_hora_inicio:selectedSlot+':00',p_cliente_nombre:$('customerName').value.trim(),p_cliente_telefono:$('customerPhone').value.trim(),p_barbero_id:barberId});
       if(error){toast(error.message||'No se pudo crear la reserva.',true);await renderSlots();return;}
-      const service=window.currentServices?.find(s=>s.id===serviceId);const label=$('serviceSelect').selectedOptions[0]?.textContent||'servicio';$('bookingMessage').classList.add('bookingAlert');$('bookingMessage').textContent='¡Tu solicitud quedó registrada! El negocio debe confirmarla desde su panel. Todavía no significa que el turno esté confirmado.';$('bookingSubmit').disabled=true;toast('Turno reservado.');
-      if(business.whatsapp){const digits=business.whatsapp.replace(/[^0-9]/g,'');const msg=`Hola, soy ${$('customerName').value.trim()}. Acabo de reservar ${label} para el ${$('bookingDate').value} a las ${selectedSlot}.`;const a=document.createElement('a');a.href=`https://wa.me/${digits}?text=${encodeURIComponent(msg)}`;a.target='_blank';a.rel='noopener';a.className='btn secondary';a.textContent='Avisar por WhatsApp';$('bookingMessage').append(' ',a);}
-      selectedSlot='';await renderSlots();
+      const label=$('serviceSelect').selectedOptions[0]?.textContent||'servicio',chosenBarber=(window.currentBarbers||[]).find(b=>b.id===barberId);$('bookingMessage').classList.add('bookingAlert');$('bookingMessage').textContent='¡Tu solicitud quedó registrada! El negocio debe confirmarla desde su panel. Todavía no significa que el turno esté confirmado.'+(chosenBarber?` Barbero: ${chosenBarber.nombre}.`:'');$('bookingSubmit').disabled=true;toast('Turno reservado.');
+      if(business.whatsapp){const digits=business.whatsapp.replace(/[^0-9]/g,'');const withBarber=chosenBarber?` con ${chosenBarber.nombre}`:'';const msg=`Hola, soy ${$('customerName').value.trim()}. Acabo de reservar ${label}${withBarber} para el ${$('bookingDate').value} a las ${selectedSlot}.`;const a=document.createElement('a');a.href=`https://wa.me/${digits}?text=${encodeURIComponent(msg)}`;a.target='_blank';a.rel='noopener';a.className='btn secondary';a.textContent='Avisar por WhatsApp';$('bookingMessage').append(' ',a);}
+      selectedSlot='';selectedBarberForBooking='';await renderSlots();
     });
 
     window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredInstall=e;$('installBtn').classList.remove('hidden');});
